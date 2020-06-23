@@ -1,0 +1,9 @@
+<launch>
+
+    <arg name="launch_prefix" default=""/>
+    
+    <node pkg="ctrl_planning" type="test_voxblox" name="test_voxblox" output="screen" launch-prefix="$(arg launch_prefix)">
+  
+    </node>
+
+</launch>
