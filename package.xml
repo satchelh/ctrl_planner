@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>ctrl_planning</name>
+  <name>ctrl_planner</name>
   <version>0.0.0</version>
-  <description>The ctrl_planning package</description>
+  <description>The ctrl_planner package</description>
   <maintainer email="satchelhirsh@nevada.unr.edu">satchel</maintainer>
 
   <license>None</license>

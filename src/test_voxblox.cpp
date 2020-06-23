@@ -1,5 +1,5 @@
 #include <iostream>
-#include "ctrl_planning/test_voxblox.h"
+#include "ctrl_planner/test_voxblox.h"
 
 using namespace std;
 

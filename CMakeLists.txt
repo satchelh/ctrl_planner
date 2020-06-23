@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(ctrl_planning)
+project(ctrl_planner)
 
 add_definitions(-std=c++11)
 
@@ -40,14 +40,14 @@ find_package(Boost 1.58 REQUIRED COMPONENTS system)
 
 # catkin_package(
 # #  INCLUDE_DIRS include
-# #  LIBRARIES ctrl_planning
+# #  LIBRARIES ctrl_planner
 #  CATKIN_DEPENDS roscpp rospy 
 # #  DEPENDS system_lib
 # )
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}
-#   src/ctrl_planning.cpp
+#   src/ctrl_planner.cpp
 # )
 
 add_executable(test_voxblox src/test_voxblox.cpp)
