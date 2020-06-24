@@ -8,6 +8,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 # from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
 
+Time = 0.6
 
 def xyz_2_PoseStamped(xyz, angles=None):
     """
@@ -32,7 +33,7 @@ def xyz_2_PoseStamped(xyz, angles=None):
     return ps
 
 
-def get_pose_after_action(start_point, initial_velocity, action, time=0.7):
+def get_pose_after_action(start_point, initial_velocity, action, time=Time):
     """
     Gets the final point after taking a given action starting from 
     the current position. Note: this function assumes no inital velocity.
@@ -54,7 +55,7 @@ def get_pose_after_action(start_point, initial_velocity, action, time=0.7):
 
     return xyz
 
-def get_vel_after_action(initial_velocity, action, time=0.7):
+def get_vel_after_action(initial_velocity, action, time=Time):
     """
     Gets the final velocity (single value) after taking a given action (given current linear velocity)
     arguments:

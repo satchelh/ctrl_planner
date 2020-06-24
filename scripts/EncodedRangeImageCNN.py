@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 from SimulationClass import *
 
-sys.path.insert(1, '/home/satchel/m100_ws/src/ctrl_planning/scripts/AutoEncoder')
+sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
 
 from CustomTrainingCallback import *
 

@@ -4,11 +4,13 @@ from utils import *
 from depthmapper.msg import DepthMap_msg
 import tf2_ros
 import tf2_geometry_msgs
+import matplotlib.pyplot as plt
+
 
 import sys
 import math
 
-sys.path.insert(1, '/home/satchel/m100_ws/src/ctrl_planning/scripts/AutoEncoder')
+sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
 
 from AutoEncoder import *
 
@@ -26,7 +28,7 @@ class SimulationClass():
         self.AutoEncoder = AutoEncoder()
         self.distance_to_goal_thresh = 0.5 # meters
         self.VelocityThreshold = 1.5 # m/s
-        self.MaxAllowedVelocity = 2.0 # m/s
+        self.MaxAllowedVelocity = 1.9 # m/s
         self.RangeImageList = []
         self.TrainingDataRIs = [] # This will be the list of state values collected during simulation, 
         # where state is our range image and action is the selected 3d accleration
@@ -60,11 +62,12 @@ class SimulationClass():
         self.topic_pose = '/Elios/ground_truth/pose'
         self.topic_odom = '/Elios/ground_truth/odometry'
 
+        self.StartTime = rospy.get_time()
         self.prev_publish_time = rospy.get_time()
-        self.time_between_waypoints = 0.5 # The rate at which we publish the next waypoint (seconds)
+        self.time_between_waypoints = 0.3 # The rate at which we publish the next waypoint (seconds)
         # I.e. every time_between_waypoints seconds we publish a waypoint.
 
-        self.save_dir = '/home/satchel/m100_ws/src/ctrl_planning/training_data/' # Dir to save the collected training data files to
+        self.save_dir = '/home/satchel/ctrl_ws/src/ctrl_planner/training_data/' # Dir to save the collected training data files to
 
         print('\nEnter whether or not to save collected training information unitl the next step, y or n: ')
         self.save_data = input()
@@ -156,7 +159,7 @@ class SimulationClass():
 
                 x = np.random.uniform(low=0, high=35)
                 y = np.random.uniform(low=-1, high=0.5)
-                z = np.random.uniform(low=0.5, high=2.8)
+                z = np.random.uniform(low=0.8, high=2.8)
 
                 self.GoalPoint_rf = [x, y, z]
                 self.save_data = 'y'
@@ -178,7 +181,7 @@ class SimulationClass():
             
         ## At this point we must account for offset in the low-level controller (z axis):
         # The offset is roughly 0.16 m:
-        end_point_rf[2] = end_point_rf[2] - 0.15
+        end_point_rf[2] = end_point_rf[2] + 0.137
         ## Now we convert endpoint to PoseStamped message:
         # end_point_wf_ps = xyz_2_PoseStamped(end_point_wf)
         end_point_rf_ps = xyz_2_PoseStamped(end_point_rf)
@@ -367,6 +370,7 @@ class SimulationClass():
         best_reward = 0.0
         best_reward_action_index = 0 # This is action [0, 0, 0], i.e. don't move. If there are no safe actions to take in the next
         # part of code, we will take this action.
+        Rewards = []
 
         for i in range (5):
 
@@ -376,12 +380,29 @@ class SimulationClass():
             if (curr_end_vel > self.VelocityThreshold):
                 curr_reward = curr_reward - ( math.exp(curr_end_vel) / (2 * math.exp(self.MaxAllowedVelocity)) )
             
+            Rewards.append(curr_reward)
+
             if (curr_reward > best_reward):
                 best_reward = curr_reward
                 best_reward_action_index = sorted_loss_input_list[i, 0]
             # Right now we only consider the action if it produces an end velocity that's less than the threshold.
         
-        print('\n\n\n\nREWARD: ', best_reward, '\n\n\n\n')
+        # print('\n\n\n\nREWARD: ', best_reward, '\n\n\n\n')
+        for r in Rewards:
+            if(r == best_reward):
+                plt.plot(rospy.get_time() - self.StartTime, r, 'bo')
+            else:
+                plt.plot(rospy.get_time() - self.StartTime, r, 'rx')
+    
+        plt.title('Optimal Reward vs Time')
+        plt.xlabel('Time')
+        plt.ylabel('Reward')
+        plt.xlim([0, rospy.get_time() - self.StartTime])
+        plt.ylim([0, 1.0])
+
+        plt.draw()
+        plt.pause(0.05)
+
         return int(best_reward_action_index)
 
 
