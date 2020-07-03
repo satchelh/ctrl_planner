@@ -5,10 +5,12 @@ import numpy as np
 
 from geometry_msgs.msg import Pose
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Vector3
+from mav_msgs.msg import RateThrust
 from nav_msgs.msg import Odometry
 # from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
 
-Time = 0.6
+ActionTime = 0.3
 
 def xyz_2_PoseStamped(xyz, angles=None):
     """
@@ -33,7 +35,29 @@ def xyz_2_PoseStamped(xyz, angles=None):
     return ps
 
 
-def get_pose_after_action(start_point, initial_velocity, action, time=Time):
+def xyz_2_Pose(xyz, angles=None):
+    """
+    converts numpy array (xyz point) to Pose message
+    """
+    p = Pose()
+    p.position.x = xyz[0]
+    p.position.y = xyz[1]
+    p.position.z = xyz[2]
+    if angles is None:
+        p.orientation.x = 0
+        p.orientation.y = 0
+        p.orientation.z = 0
+        p.orientation.w = 1
+    else:
+        p.orientation.x = angles[0]
+        p.orientation.y = angles[1]
+        p.orientation.z = angles[2]
+        p.orientation.w = angles[3]
+
+    return p
+
+
+def get_pose_after_action(start_point, initial_velocity, action, time=ActionTime):
     """
     Gets the final point after taking a given action starting from 
     the current position. Note: this function assumes no inital velocity.
@@ -55,7 +79,7 @@ def get_pose_after_action(start_point, initial_velocity, action, time=Time):
 
     return xyz
 
-def get_vel_after_action(initial_velocity, action, time=Time):
+def get_vel_after_action(initial_velocity, action, time=ActionTime):
     """
     Gets the final velocity (single value) after taking a given action (given current linear velocity)
     arguments:
@@ -110,3 +134,24 @@ def pose_2_np_arr_xyz(msg):
     y = msg.position.y
     z = msg.position.z
     return np.array([x,y,z])
+
+def acc_to_RateThrust(acc):
+    """
+    converts 3D acceleration to geometry_msgs/Vector3
+    and therefore creates the mav_msgs/RateThrust message.
+    """
+
+    acc_vec3 = Vector3()
+    acc_vec3.x = acc[0]
+    acc_vec3.y = acc[1]
+    acc_vec3.z = acc[2]
+
+    direction_vec3 = Vector3()
+    direction_vec3.x = 0
+    direction_vec3.y = 0
+    direction_vec3.z = 0
+
+    rate_thrust_msg = RateThrust()
+    rate_thrust_msg.thrust = acc_vec3
+    rate_thrust_msg.angular_rates = direction_vec3
+    return rate_thrust_msg

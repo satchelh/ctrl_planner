@@ -1,0 +1,8 @@
+<launch>
+
+    <include file="$(find rotors_gazebo)/launch/ctrl_sim_1.launch">
+        <arg name="mav_name" default="Elios"/>
+        <arg name="world_name" default="comstock"/>
+    </include>
+
+</launch>
