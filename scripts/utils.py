@@ -60,13 +60,13 @@ def xyz_2_Pose(xyz, angles=None):
 def get_pose_after_action(start_point, initial_velocity, action, time=ActionTime):
     """
     Gets the final point after taking a given action starting from 
-    the current position. Note: this function assumes no inital velocity.
+    the current position, and given the initial linear velocities.
     arguments: 
         start_point (x, y, z), action (3d acceleration vector), time (seconds)
     returns:
         final pose after taking action (np array of length 3)
     """
-
+    # print(start_point)
     action = [float(a) for a in action]
     time = float(time)
     initial_velocity = [float(v) for v in initial_velocity]
@@ -85,9 +85,11 @@ def get_vel_after_action(initial_velocity, action, time=ActionTime):
     arguments:
         initial linear velocity (i.e. vel in [x, y, z] in m/s), action (3d acceleration vector), time (seconds)
     returns:
-        final velocity after taking action 
+        final velocity after taking action (directional, single value) and linear 3D velocity after action
+        (3D list of velocities in x, y, and z direcitons respectively).
     """
 
+    
     initial_velocity = [float(v) for v in initial_velocity]
     action = [float(a) for a in action]
     time = float(time)
@@ -104,7 +106,7 @@ def get_vel_after_action(initial_velocity, action, time=ActionTime):
     # actually be moving at the projected final position
     directional_final_velocity = np.sqrt( np.sum ( np.square(final_velocity), axis=0 ) )
 
-    return directional_final_velocity
+    return directional_final_velocity, final_velocity
 
 def euclidean_dist(start, end):
     """

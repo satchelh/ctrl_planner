@@ -7,15 +7,15 @@ import matplotlib.pyplot as plt
 
 from SimulationClass import *
 
-sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
+sys.path.insert(1, '/home/satchel/ctrl1_ws/src/ctrl_planner/scripts/AutoEncoder')
 
 from CustomTrainingCallback import *
 
 TrainingData = []
 
-EncodedTrainingData = np.loadtxt('/home/satchel/m100_ws/src/ctrl_planning/training_data/TrainingDataEncodedRIs.txt').astype(float)
+EncodedTrainingData = np.loadtxt('/home/satchel/ctrl1_ws/src/ctrl_planner/training_data/TrainingDataEncodedRIs.txt').astype(float)
 
-LabelData = np.loadtxt('/home/satchel/m100_ws/src/ctrl_planning/training_data/TrainingDataLabels.txt') #.astype(float)
+LabelData = np.loadtxt('/home/satchel/ctrl1_ws/src/ctrl_planner/training_data/TrainingDataLabels.txt') #.astype(float)
 
 
 done_filtering = False
@@ -95,4 +95,4 @@ if __name__ == '__main__':
 
 
     rospy.init_node('test')
-    Sim = SimulationClass([30, 0.5, 2], 'Test', model)
+    Sim = SimulationClass([5, 0, 2], 'Test', model)

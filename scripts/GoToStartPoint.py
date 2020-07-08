@@ -7,7 +7,7 @@ rospy.init_node('GoToStart')
 rospy.sleep(3)
 
 # RateThrustPublisher = rospy.Publisher(
-#     '/Elios/command/rate_thrust', RateThrust, queue_size=45
+#     '/elios_VLP16/command/rate_thrust', RateThrust, queue_size=45
 # )
 
 # first_act_msg = acc_to_RateThrust([0, 0, 1])
@@ -15,7 +15,7 @@ rospy.sleep(3)
 pose_msg = xyz_2_Pose([0, 0, 1])
 
 PosePublisher = rospy.Publisher(
-    '/Elios/goal', Pose, queue_size=45,
+    '/elios_VLP16/goal', Pose, queue_size=45,
 )
 
 print('\n\n\nMoving to starting position (0, 0, 1)\n\n\n')

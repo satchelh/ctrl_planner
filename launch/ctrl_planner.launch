@@ -1,6 +1,0 @@
-<launch>
-
-    <node pkg="ctrl_planner" name="RunSim" type="RunSim.py" output="screen">
-    </node>
-
-</launch>

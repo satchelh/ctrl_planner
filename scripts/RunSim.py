@@ -18,7 +18,7 @@ if __name__ == '__main__':
     # print(np.min(test, axis=1))
     # test = np.array(test)
     # print(test[:, 1])
-    Sim = SimulationClass([8, 0, 1])
+    Sim = SimulationClass([10, 0, 1])
 
     
 
