@@ -2,11 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from tensorflow.keras import layers, models, callbacks
+from tensorflow.keras import backend as K
 import tensorflow as tf
 import datetime
 
 from CustomTrainingCallback import *
-
 
 class AutoEncoder():
 
@@ -14,7 +14,7 @@ class AutoEncoder():
 
         self.img_dim = img_dim
 
-        self.data_file_dir = '/home/satchel/ctrl1_ws/src/ctrl_planner/training_data/TrainingDataFVs.txt'
+        self.data_file_dir = '/home/satchel/ctrl_ws/src/ctrl_planner/training_data/TrainingDataFVs.txt'
 
         FlattenedTrainingData, self.TrainingData = self.load_data(self.data_file_dir)
         self.TrainingData = np.expand_dims(self.TrainingData, -1)
@@ -34,10 +34,13 @@ class AutoEncoder():
 
         self.autoencoder = models.Model(inp, reconstruction)
 
+
         self.autoencoder.compile(optimizer='adam', loss='mse') # Mean squared error loss
         # decoder.compile(optimizer='adam', loss='mse', metrics=['accuracy']) # Mean squared error loss
 
         print(self.autoencoder.summary())
+
+        return 
 
     def load_data(self, file_dir):
 
@@ -262,7 +265,7 @@ class AutoEncoder():
         self.show_image(np.reshape(reco, (16, 90)))
         plt.show()
 
-    def save_model(self, model_dir='/home/satchel/ctrl1_ws/src/ctrl_planner/scripts/AutoEncoder/weights/'):
+    def save_model(self, model_dir='/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder/weights/'):
         encoder_fn = model_dir + "encoder_weights"
         encoder_decoder_fn = model_dir + "encoder_DECODER_weights"
 
@@ -272,9 +275,9 @@ class AutoEncoder():
         return encoder_fn, encoder_decoder_fn
 
     def load_model(self,
-            encoder_fn='/home/satchel/ctrl1_ws/src/ctrl_planner/scripts/AutoEncoder/weights/encoder_weights',
-            encoder_decoder_fn='/home/satchel/ctrl1_ws/src/ctrl_planner/scripts/AutoEncoder/weights/encoder_DECODER_weights'
-            ):
+            encoder_fn='/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder/weights/encoder_weights',
+            encoder_decoder_fn='/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder/weights/encoder_DECODER_weights'
+        ):
         print('\nWEIGHTS BEFORE RESTORE:\n', self.encoder.get_weights()[0][0][0])
         self.encoder.load_weights(encoder_fn)
         self.autoencoder.load_weights(encoder_decoder_fn)

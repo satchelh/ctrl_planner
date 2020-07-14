@@ -7,15 +7,15 @@ import matplotlib.pyplot as plt
 
 from SimulationClass import *
 
-sys.path.insert(1, '/home/satchel/ctrl1_ws/src/ctrl_planner/scripts/AutoEncoder')
+sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
 
 from CustomTrainingCallback import *
 
 TrainingData = []
 
-EncodedTrainingData = np.loadtxt('/home/satchel/ctrl1_ws/src/ctrl_planner/training_data/TrainingDataEncodedRIs.txt').astype(float)
+EncodedTrainingData = np.loadtxt('/home/satchel/ctrl_ws/src/ctrl_planner/training_data/TrainingDataEncodedRIs.txt').astype(float)
 
-LabelData = np.loadtxt('/home/satchel/ctrl1_ws/src/ctrl_planner/training_data/TrainingDataLabels.txt') #.astype(float)
+LabelData = np.loadtxt('/home/satchel/ctrl_ws/src/ctrl_planner/training_data/TrainingDataLabels.txt') #.astype(float)
 
 
 done_filtering = False

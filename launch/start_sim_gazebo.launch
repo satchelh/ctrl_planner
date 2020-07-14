@@ -5,5 +5,10 @@
         <arg name="world_name" default="comstock"/>
     </include>
     
+    <!-- <node pkg="ctrl_planner" name="GoToStartPoint" type="GoToStartPoint.py" output="screen">
+    </node> -->
+
+    <!-- <node pkg="ctrl_planner" name="RunSim" type="RunSim.py" output="screen">
+    </node> -->
 
 </launch>

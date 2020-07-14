@@ -5,11 +5,10 @@ from SimulationClass import *
 from nav_msgs.msg import Odometry
 import numpy as np
 
-
-
 if __name__ == '__main__':
 
     rospy.init_node('RunSim') 
+    # rospy.sleep(7)
 
     # test = []
     # test.append([0, 1])
@@ -18,7 +17,11 @@ if __name__ == '__main__':
     # print(np.min(test, axis=1))
     # test = np.array(test)
     # print(test[:, 1])
-    Sim = SimulationClass([10, 0, 1])
+    # session = tf.compat.v1.Session()
+    # tf.keras.backend.clear_session()
+    # tf.compat.v1.keras.backend.set_session(session)
+
+    Sim = SimulationClass([15, 0, 2])
 
     
 

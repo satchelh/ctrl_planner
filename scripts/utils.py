@@ -8,9 +8,12 @@ from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Vector3
 from mav_msgs.msg import RateThrust
 from nav_msgs.msg import Odometry
+
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs.point_cloud2 import read_points
 # from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
 
-ActionTime = 0.3
+ActionTime = 0.28
 
 def xyz_2_PoseStamped(xyz, angles=None):
     """
@@ -79,34 +82,17 @@ def get_pose_after_action(start_point, initial_velocity, action, time=ActionTime
 
     return xyz
 
-def get_vel_after_action(initial_velocity, action, time=ActionTime):
+def get_dir_vel(linear_velocity):
     """
-    Gets the final velocity (single value) after taking a given action (given current linear velocity)
-    arguments:
-        initial linear velocity (i.e. vel in [x, y, z] in m/s), action (3d acceleration vector), time (seconds)
-    returns:
-        final velocity after taking action (directional, single value) and linear 3D velocity after action
-        (3D list of velocities in x, y, and z direcitons respectively).
+    Gets the directional velocity (single value) from linear velocity (3D)
+
     """
-
     
-    initial_velocity = [float(v) for v in initial_velocity]
-    action = [float(a) for a in action]
-    time = float(time)
+    linear_velocity = [float(v) for v in linear_velocity]
     
-    # Formula for finding final velocity given constant acceleration and time, and initial_velocity,
-    # is ( initial_velocity + (a * t) ). Note that we also need the direction in which the robot is heading.
+    directional_velocity = np.sqrt( np.sum ( np.square(linear_velocity), axis=0 ) )
 
-    final_velocity = np.zeros(shape=(3,)) # final_velocity will be the 3d final velocity.
-    final_velocity[0] = initial_velocity[0] + ( action[0] * time )
-    final_velocity[1] = initial_velocity[1] + ( action[1] * time )
-    final_velocity[2] = initial_velocity[2] + ( action[2] * time )
-
-    # Now we must get a single value for the final velocity, i.e. the velocity in the direction the robot would 
-    # actually be moving at the projected final position
-    directional_final_velocity = np.sqrt( np.sum ( np.square(final_velocity), axis=0 ) )
-
-    return directional_final_velocity, final_velocity
+    return directional_velocity
 
 def euclidean_dist(start, end):
     """
@@ -157,3 +143,11 @@ def acc_to_RateThrust(acc):
     rate_thrust_msg.thrust = acc_vec3
     rate_thrust_msg.angular_rates = direction_vec3
     return rate_thrust_msg
+
+def get_distance_to_closest_point(pc):
+
+    points = np.array(list(read_points(pc)))
+    xyz = np.array([(x, y, z) for x, y, z, _, _ in points]) # assumes XYZIR
+    r = np.linalg.norm(xyz, axis=-1)
+
+    return np.min(r)

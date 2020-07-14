@@ -1,6 +1,0 @@
-<launch>
-
-    <node pkg="ctrl_planner" name="EncodedRangeImageCNN" type="EncodedRangeImageCNN.py" output="screen">
-    </node>
-
-</launch>

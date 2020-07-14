@@ -1,229 +1,126 @@
-#!/usr/bin/env python
-
+from ActorCritic import *
+from Reward import *
 from utils import *
+
 from depthmapper.msg import DepthMap_msg
-import tf2_ros
-import tf2_geometry_msgs
+from sensor_msgs.msg import PointCloud2
+from gazebo_msgs.msg import ContactsState, ModelState
+from std_srvs.srv import Empty, EmptyRequest
+
+from tensorflow.keras import backend as K
 
 import sys
 
-sys.path.insert(1, '/home/satchel/ctrl1_ws/src/ctrl_planner/scripts/AutoEncoder')
+sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
 
 from AutoEncoder import *
-from Reward import *
 
+tf.compat.v1.disable_eager_execution()
 
 class SimulationClass():
 
-    def __init__(self, GoalPoint, Mode='Train', Network=None): # Here mode is either Train or Test, where train uses the loss function to move and collects
-        # training data along the way, and test uses a trained CNN to move.
+    def __init__(self, GoalPoint, Mode='Train', Network=None):
 
         self.GoalPoint_rf = GoalPoint
+        self.StartPoint_rf = [3, 0, 1]
         self.Mode = Mode
         self.Network = Network
         self.AutoEncoder = AutoEncoder()
-        self.Reward = Reward(self.GoalPoint_rf)
-        self.distance_to_goal_thresh = 0.9 # meters
+        self.AutoEncoder.load_model()
+
+        self.PointCloudList = []
         self.RangeImageList = []
+
+        self.TrainingData = []
         self.TrainingDataRIs = [] # This will be the list of state values collected during simulation, 
         # where state is our range image and action is the selected 3d accleration
         self.TrainingDataEncodedRIs = []
+
         self.TrainingDataLabels = [] # And this will be the list of respective action values collected during simulation, 
         # where action is the selected 3d accleration
 
         self.PoseList = []
-        self.MaxPoseListSize = 5
-        self.MaxRangeImageListSize = 10
+
+        self.MaxPointCLoudListSize = 3
+        self.MaxRangeImageListSize = 3
+        self.MaxPoseListSize = 3
         self.VelocityList = [] # To store most recent velocity 
         self.PossibleActions = PossibleActions
 
+        self.model_name = 'elios_VLP16'
         # topics:
+        self.topic_point_cloud = '/velodyne_points'
         self.topic_range_img = "/depth_map"
-        self.topic_pose = '/elios_VLP16/ground_truth/pose'
-        self.topic_odom = '/elios_VLP16/ground_truth/odometry'
+        self.topic_pose = '/' + self.model_name + '/ground_truth/pose'
+        self.topic_odom = '/' + self.model_name + '/ground_truth/odometry'
+        self.topic_contact = '/' + self.model_name + '/' + self.model_name + '_contact'
+        # frames:
+        self.robot_collision_frame = None
+        self.ground_collision_frame = None
         # publishers:
         self.PosePublisher = rospy.Publisher(
-            '/elios_VLP16/goal', Pose, queue_size=45,
+            '/elios_VLP16/goal', Pose, queue_size=1,
         )
         self.RateThrustPublisher = rospy.Publisher(
-            '/elios_VLP16/command/rate_thrust', RateThrust, queue_size=45
+            '/elios_VLP16/command/rate_thrust', RateThrust, queue_size=1
+        )
+        self.ResetPublisher = rospy.Publisher(
+            '/gazebo/set_model_state', ModelState, queue_size=1
         )
 
-        # create transforms:
-        self.tf_buffer = tf2_ros.Buffer(rospy.Duration(120.0))
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        self.session = tf.compat.v1.Session()
+        tf.compat.v1.keras.backend.set_session(self.session)
+        self.ActorCritic = ActorCritic(self.session)
 
+        self.curr_iteration = 0
+        self.MAX_ITERATIONS_PER_EPISODE = 40
+        self.epsilon = 1.0
+        self.epsilon_decay = 0.95
 
-        ### Now convert goal point to world frame:
-        self.GoalPoint_rf_ps = xyz_2_PoseStamped(self.GoalPoint_rf)
+        self.Reward = Reward(self.GoalPoint_rf)
 
-        self.GoalPoint_wf_ps = self.RF_to_WF(self.GoalPoint_rf_ps)
-        self.GoalPoint_wf = pose_2_np_arr_xyz(self.GoalPoint_wf_ps.pose)
-        print('Distance to goal per dimension: ', self.GoalPoint_wf)
-
-
-        self.prev_publish_time = rospy.get_time()
-        self.inference_time = 0
-        self.time_between_publishes = ActionTime # The rate at which we publish the next waypoint (seconds)
-        # I.e. every time_between_publishes seconds we publish a waypoint.
-
-        self.save_dir = '/home/satchel/ctrl1_ws/src/ctrl_planner/training_data/' # Dir to save the collected training data files to
-
-        print('\nEnter whether or not to save collected training information unitl the next step, y or n: ')
-        self.save_data = input()
-
-        self.AutoEncoder.load_model()
+        self.ResetSim()
 
         self.init_subscribers()
-
-        return
-
-
-    def encode_RI(self, range_image):
-        """ Accepts as input a flattened range image, direct from the topic,
-        and ouputs the encoded version (1D) with the current Goalpoint added to the end.
-        """
-        RI = np.reshape(range_image, (16, 90))
-
-        RI = np.expand_dims(RI, -1)
-        RI = np.expand_dims(RI, 0)
-
-        encoded_RI = self.AutoEncoder.encoder.predict(RI)
-
-        encoded_RI_with_GP = np.append(encoded_RI[0], self.GoalPoint_rf, axis=0)
-
-        return encoded_RI_with_GP
-
     
-    def add_to_training_data(self, action):
-        curr_RI = self.RangeImageList[0]
 
-        self.TrainingDataRIs.append(curr_RI)
+    def init_subscribers(self):
+        """ initialize ROS subscribers and publishers """
+        # subscribers
+        rospy.Subscriber(
+            self.topic_point_cloud, PointCloud2, self.PointCloudCallback,
+        )
 
-        encoded_RI_with_GP = self.encode_RI(curr_RI)
+        rospy.Subscriber(
+            self.topic_range_img, DepthMap_msg, self.RangeImageCallback,
+        )
 
-        self.TrainingDataEncodedRIs.append(encoded_RI_with_GP)
+        rospy.Subscriber(
+            self.topic_odom, Odometry, self.callback_odom, 
+        )
 
-        self.TrainingDataLabels.append(self.PossibleActions.index(action))
+        rospy.Subscriber(
+            self.topic_contact, ContactsState, self.contact_callback
+        )
 
+        # rospy.Subscriber(
+        #     self.topic_pose, Pose, self.callback_pose, 
+        # )
 
-    def find_and_publish_next_action(self):
-
-        curr_pose = self.get_current_pose_xyz()
-        ## Note that start_poit_rf is the point the robot is currently at in terms of the acual origin.
-        # action_wf, end_point_wf = self.getBestActionWF(curr_pose)
-        if(self.Mode == 'Train'):
-
-            action_rf, end_point_rf = self.getBestActionRF(curr_pose)
-
-            # print('\n\nstart point: ', curr_pose)
-            distance_to_goal = euclidean_dist(curr_pose, self.GoalPoint_rf)
-            # print('Goal point: ', self.GoalPoint_rf)
-            # print('The current distance to the goal is ', distance_to_goal)
-            # print('Taking action ', action_rf)
-            self.inference_time = rospy.get_time() - self.prev_publish_time
-            print('TOTAL TIME SINCE LAST PUBLISH (TRAIN MODE): ', self.inference_time)
-
-        elif(self.Mode == 'Test'):
-            # First reshape range image:
-            range_image = self.RangeImageList[0]
-            # range_image = np.expand_dims(range_image, -1)
-            # range_image = np.expand_dims(range_image, 0)
-            encoded_RI_with_GP = self.encode_RI(range_image)
-            encoded_RI_with_GP = np.expand_dims(encoded_RI_with_GP, -1)
-            encoded_RI_with_GP = np.expand_dims(encoded_RI_with_GP, 0)
-
-            action_index = np.argmax(self.Network.predict(encoded_RI_with_GP)) # action_index = np.argmax(self.Network.predict(range_image))
-            action_rf = self.PossibleActions[action_index]
-            end_point_rf = get_pose_after_action(curr_pose, self.VelocityList[0], action_rf)
-
-            print('start point: ', curr_pose)
-            print('Taking action ', action_rf)
-            print('This takes us to point ', end_point_rf)
-
-            distance_to_goal = euclidean_dist(end_point_rf, self.GoalPoint_rf)
-            print('The optimal distance to the goal was ', distance_to_goal)
-
-            self.inference_time = rospy.get_time() - self.prev_publish_time
-            print('TOTAL TIME SINCE LAST PUBLISH (TEST MODE): ', self.inference_time)
-
-
-        # if (distance_to_goal < self.distance_to_goal_thresh):
-        #     print('\n\nWe have reached the goal (within distance to goal threshold)\n\n')
-        #     print(self.TrainingData)  
-        #     rospy.signal_shutdown('Shutdown')
-
-        if (distance_to_goal < self.distance_to_goal_thresh): # I.e. the best action is to not move (we have reached the goal), 
-        # or we are simply trying to slow down a little bit. For the latter case, we don't want to do anything in this if statement, just continue the sim. So we 
-        # also check in this if statement if the goal has actually been reached.
-
-            # while(True):
-            #     self.publish_action(acc_to_RateThrust([0, 0, 0])) # Stop for a little bit
-            #     rospy.sleep(0.5)
-
-            if (self.Mode == 'Train'):
-                with open (self.save_dir + 'TrainingDataRIs.txt', 'ab') as f:
-                    np.savetxt(f, self.TrainingDataRIs, fmt='%.5f')
-                with open (self.save_dir + 'TrainingDataEncodedRIs.txt', 'ab') as f:
-                    np.savetxt(f, self.TrainingDataEncodedRIs, fmt='%.5f')
-                with open (self.save_dir + 'TrainingDataLabels.txt', 'ab') as f:
-                    np.savetxt(f, self.TrainingDataLabels, fmt='%.5f')
-            
-            self.TrainingDataRIs *= 0
-            self.TrainingDataEncodedRIs *= 0
-            self.TrainingDataLabels *= 0
-
-            self.Reward.ResetPlot()
-
-            if (self.GoalPoint_rf == [0, 0, 2]):
-
-                x = np.random.uniform(low=0, high=28)
-                y = np.random.uniform(low=-1, high=0.5)
-                z = np.random.uniform(low=0.8, high=2.8)
-
-                self.GoalPoint_rf = [x, y, z]
-                self.Reward.SetGoalPoint(self.GoalPoint_rf)
-                self.save_data = 'y'
-        
-            elif (self.GoalPoint_rf != [0, 0, 2]):
-                self.GoalPoint_rf = [0, 0, 2]
-                self.save_data = 'n'
+        rospy.spin() # spin() simply keeps python from exiting until this node is stopped
 
         
-        elif (self.Mode=='Test' and distance_to_goal < self.distance_to_goal_thresh): # This is how we stop the robot in test mode (using the net)
-        # when it has reached it's goal
-            print('\nEnter new goal point in format [x, y, z]: ')
-            self.GoalPoint_rf = input()
-            print('\nEnter whether or not to save collected training information unitl the next step, y or n: ')
-            self.save_data = input()
-
-            
-        ## At this point we must account for offset in the low-level controller (z axis):
-        # The offset is roughly 0.16 m:
-        # end_point_rf[2] = end_point_rf[2] + 0.137
-        ## Now we convert endpoint to PoseStamped message:
-        # end_point_wf_ps = xyz_2_PoseStamped(end_point_wf)
-        action_rf_rt = acc_to_RateThrust(action_rf)
-        end_point_rf_ps = xyz_2_PoseStamped(end_point_rf)
-
-
-
-
-        if (self.save_data == 'y'):
-            self.add_to_training_data(action_rf)
-
-        if (euclidean_dist(curr_pose, [0.0, 0.0, 0.0]) < 0.2): # This is for the purpose of goin up a little bit before starting the real sim
-            point_rf = [0, 0, 1]
-            print('\nInstead, moving to point ', point_rf)
-            self.PosePublisher(xyz_2_Pose(point_rf))
-        else:
-            self.publish_action(action_rf_rt)
-
-
-        self.prev_publish_time = rospy.get_time()
-
         return
 
+    def PointCloudCallback(self, data):
+
+        pcl = data
+        self.PointCloudList.insert(0, pcl)
+
+        if len(self.PointCloudList) > self.MaxPointCLoudListSize:
+            self.PointCloudList.pop()
+
+        return
 
     def RangeImageCallback(self, data):
         # rospy.loginfo("Recieved Range Image")
@@ -259,148 +156,297 @@ class SimulationClass():
         if len(self.PoseList) > self.MaxPoseListSize:
             self.PoseList.pop()
 
-        if ( (rospy.get_time() - self.prev_publish_time) > self.time_between_publishes):
-            self.find_and_publish_next_action()
-            self.prev_publish_time = rospy.get_time()
-
+        self.find_and_publish_next_action()
+        
         return
 
-    def callback_pose(self, msg):
-        """ update queue which tracks recent pose data """
-        # if running in simulation, pose with covariance stamped is not used
-        self.PoseList.insert(0, msg)
-        if len(self.PoseList) > self.MaxPoseListSize:
-            self.PoseList.pop()
+    def contact_callback(self, msg):
+        # Check inside the models states for robot's contact state
+        for i in range(len(msg.states)):
+            if (msg.states[i].collision1_name == self.robot_collision_frame):
+                rospy.logdebug('Contact found!')
+                if (msg.states[i].collision2_name ==
+                        self.ground_collision_frame):
+                    rospy.logdebug('Robot colliding with the ground')
+                else:
+                    rospy.logdebug(
+                        'Robot colliding with something else (not ground)')
+                    self.reset_sim()
+            else:
+                rospy.logdebug('Contact not found yet ...')
 
-        if ( (rospy.get_time() - self.prev_publish_time) > self.time_between_publishes):
-            self.find_and_publish_next_action()
-            self.prev_publish_time = rospy.get_time()
 
-        return
+    def encode_RI(self, range_image):
+        """ Accepts as input a flattened range image, direct from the topic,
+        and ouputs the encoded version (1D) with the current Goalpoint added to the end.
+        """
+        RI = np.reshape(range_image, (16, 90))
+
+        RI = np.expand_dims(RI, -1)
+        RI = np.expand_dims(RI, 0)
+
+        encoded_RI = self.AutoEncoder.encoder.predict(RI)
+
+        encoded_RI_with_GP = np.append(encoded_RI[0], self.GoalPoint_rf, axis=0)
+
+        return encoded_RI_with_GP
+
     
+    def add_to_training_data(self, prev_RI, action, reward, curr_RI=None):
 
-    def init_subscribers(self):
-        """ initialize ROS subscribers and publishers """
-        # subscribers
-        rospy.Subscriber(
-            self.topic_range_img, DepthMap_msg, self.RangeImageCallback,
-        )
+        self.TrainingDataRIs.append(curr_RI)
 
-        rospy.Subscriber(
-            self.topic_odom, Odometry, self.callback_odom, 
-        )
+        encoded_prev_RI = self.encode_RI(prev_RI)
 
-        # rospy.Subscriber(
-        #     self.topic_pose, Pose, self.callback_pose, 
-        # )
-
-
-        rospy.spin() # spin() simply keeps python from exiting until this node is stopped
+        if (curr_RI == None):
+            curr_RI = self.RangeImageList[0]
         
-        return
+        encoded_curr_RI = self.encode_RI(curr_RI)
 
-    def publish_waypoint(self, pose_stamped_msg):
-        
-        # rate = rospy.Rate(50) # 1hz
+        self.TrainingData.append([encoded_prev_RI, action, reward, encoded_curr_RI]) # This is our main result
 
-        if not rospy.is_shutdown():
-            print('Publishing Waypoint')
-            self.PosePublisher.publish(pose_stamped_msg)
+        self.TrainingDataEncodedRIs.append(encoded_prev_RI)
 
-        return 
+        self.TrainingDataLabels.append(self.PossibleActions.index(action))
+
 
     def publish_action(self, rate_thrust_msg):
         
         # rate = rospy.Rate(50) # 1hz
 
         if not rospy.is_shutdown():
-            print('Publishing Acceleration')
+            # print('Publishing Acceleration')
             self.RateThrustPublisher.publish(rate_thrust_msg)
 
         return 
-
-
+    
     def get_current_pose_xyz(self):
         """
         Returns:
             most recently-received pose as x,y,z coordinates in world frame
         """
         return pose_2_np_arr_xyz(self.PoseList[0])
+    
+
+    def find_and_publish_next_action(self):
+
+        curr_RI = self.RangeImageList[0]
+        ## Note that start_poit_rf is the point the robot is currently at in terms of the acual origin.
+        # action_wf, end_point_wf = self.getBestActionWF(curr_pose)
+        if(self.Mode == 'Train'):
+
+            with self.session.as_default():
+
+                with self.session.graph.as_default():
+
+                    if self.curr_iteration % self.MAX_ITERATIONS_PER_EPISODE == 0: # Retrain
+                        # First stop the robot:
+                        self.ResetSim()
+                        curr_pose = self.get_current_pose_xyz()
+                        curr_pose_msg = xyz_2_Pose(curr_pose)
+                        self.PosePublisher.publish(curr_pose_msg)
+                        
+
+                        print('\nRetraining with ' + str(len(self.TrainingData)) + ' samples.\n\n')
+                        rospy.sleep(1)
+                        self.ActorCritic.train(self.TrainingData, iterations=1)
+
+                        while self.ActorCritic.DoneTraining == False:
+                            
+                            continue
+                            # curr_pose = self.get_current_pose_xyz()
+                            # curr_pose_msg = xyz_2_Pose(curr_pose)
+                            # self.PosePublisher.publish(curr_pose_msg)
+                        
+
+                        # rospy.sleep(5)
+                        self.ActorCritic.DoneTraining = False
+                        if self.curr_iteration % self.MAX_ITERATIONS_PER_EPISODE == 3: # i.e. only after 3 epochs 
+                        # of training with random actions do we start using predicitons from our actor net.
+                            self.epsilon *= self.epsilon_decay
+
+                    else:       
+
+                        curr_state = self.encode_RI(curr_RI)
+                
+                        curr_state = np.expand_dims(curr_state, 0)
+                        
+                        action_rf = self.ActorCritic.act(curr_state, self.epsilon)
+                        action_rf = action_rf[0]
+
+                        start_time = rospy.get_time()
+                        action_rf_rt = acc_to_RateThrust(action_rf)
+                        self.publish_action(action_rf_rt) # Here publish action
+
+                        print('Taking action ', action_rf)
+                        while (rospy.get_time() - start_time) < ActionTime:
+                            continue
+                
+                        new_state = self.encode_RI(self.RangeImageList[0])
+                        new_state = np.expand_dims(new_state, 0)
+                        curr_pose = self.get_current_pose_xyz()
+                        curr_pcl = self.PointCloudList[0]
+                        curr_lin_vel = self.VelocityList[0]
+                        reward = self.Reward.GetReward(curr_pose, curr_pcl, curr_lin_vel)
+
+                        action_rf = np.expand_dims(action_rf, 0)
+
+                        self.TrainingData.append([curr_state, action_rf, reward, new_state])
+                        
+                        self.curr_iteration+=1
+
+    def ResetSim(self):
+        # rospy.loginfo('Pausing physics')
+        # self.pause_physics_proxy(EmptyRequest())
+
+        # Fill in the new position of the robot
+        new_position = ModelState()
+        new_position.model_name = self.model_name
+        new_position.reference_frame = 'world'
+        new_position.pose.position.x = self.StartPoint_rf[0]
+        new_position.pose.position.y = self.StartPoint_rf[1]
+        new_position.pose.position.z = self.StartPoint_rf[2]
+        new_position.pose.orientation.x = 0
+        new_position.pose.orientation.y = 0
+        new_position.pose.orientation.z = 0
+        new_position.pose.orientation.w = 1
+        new_position.twist.linear.x = 0
+        new_position.twist.linear.y = 0
+        new_position.twist.linear.z = 0
+        new_position.twist.angular.x = 0
+        new_position.twist.angular.y = 0
+        new_position.twist.angular.z = 0
+        rospy.loginfo('Placing robot')
+        self.ResetPublisher.publish(new_position)
+
+        # self.reset_timer()
+
+        # rospy.loginfo('Unpausing physics')
+        # self.unpause_physics_proxy(EmptyRequest())
 
 
-    def RF_to_WF(self, pose_stamped_rf):
-        """ 
-        This function transfroms a pose_stamped point in the robot frame to the world frame.
-        """
-        rate = rospy.Rate(10.0)
+            # action_rf = self.ActorCritic.act(self.encode_RI(curr_state))
+            # start_time = rospy.get_time()
 
-        transform_found = False
-        while not transform_found:
-            try:
-                tf_r2w = self.tf_buffer.lookup_transform('elios_VLP16/base_link', 'world', rospy.Time(0))
-                transform_found = True
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-                print('NO TRANSFORM FOUND')
-                rate.sleep()
-                continue
+            # action_rf_rt = acc_to_RateThrust(action_rf)
+            # self.publish_action(action_rf_rt) # Here publish action
+
+            # while (rospy.get_time - start_time) < ActionTime:
+            #     print('Taking action ', action_rf)
             
-        pose_stamped_wf = tf2_geometry_msgs.do_transform_pose(pose_stamped_rf, tf_r2w)
+            # new_state = self.RangeImageList[0]
+            # curr_pose = self.get_current_pose_xyz()
+            # curr_pcl = self.PointCloudList[0]
+            # curr_lin_vel = self.VelocityList[0]
+            # reward = self.Reward.GetReward(curr_pose, curr_pcl, curr_lin_vel)
 
-        return pose_stamped_wf
+            # self.add_to_training_data(curr_state, action_rf, reward, new_state)
 
-    def WF_to_RF(self, pose_stamped_wf):
-        """ 
-        This function transfroms a pose_stamped point in the world frame to the robot frame.
-        """
-        rate = rospy.Rate(10.0)
-
-        transform_found = False
-        while not transform_found:
-            try:
-                tf_w2r = self.tf_buffer.lookup_transform('world', 'elios_VLP16/base_link', rospy.Time(0))
-                transform_found = True
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-                print('NO TRANSFORM FOUND')
-                rate.sleep()
-                continue
             
-        pose_stamped_rf = tf2_geometry_msgs.do_transform_pose(pose_stamped_wf, tf_w2r)
 
-        return pose_stamped_rf
+            # self.ActorCritic.train(self.TrainingData)
+
+            # tf.compat.v1.keras.backend.clear_session()
+            # sess = tf.compat.v1.Session()
+            # tf.compat.v1.keras.backend.set_session(sess)
 
 
-    def getBestActionRF(self, start_point):
-        BestAction = self.PossibleActions[0]
-        initial_velocity = self.VelocityList[0] # Note that this is 3d current velocity
-        best_end_point_rf = get_pose_after_action(start_point, initial_velocity, BestAction)
+        # elif(self.Mode == 'Test'):
+        #     # First reshape range image:
+        #     range_image = self.RangeImageList[0]
+        #     # range_image = np.expand_dims(range_image, -1)
+        #     # range_image = np.expand_dims(range_image, 0)
+        #     encoded_RI_with_GP = self.encode_RI(range_image)
+        #     encoded_RI_with_GP = np.expand_dims(encoded_RI_with_GP, -1)
+        #     encoded_RI_with_GP = np.expand_dims(encoded_RI_with_GP, 0)
+
+        #     action_index = np.argmax(self.Network.predict(encoded_RI_with_GP)) # action_index = np.argmax(self.Network.predict(range_image))
+        #     action_rf = self.PossibleActions[action_index]
+        #     end_point_rf = get_pose_after_action(curr_pose, self.VelocityList[0], action_rf)
+
+        #     print('start point: ', curr_pose)
+        #     print('Taking action ', action_rf)
+        #     print('This takes us to point ', end_point_rf)
+
+        #     distance_to_goal = euclidean_dist(end_point_rf, self.GoalPoint_rf)
+        #     print('The optimal distance to the goal was ', distance_to_goal)
+
+        #     self.inference_time = rospy.get_time() - self.prev_publish_time
+        #     print('TOTAL TIME SINCE LAST PUBLISH (TEST MODE): ', self.inference_time)
+
+
+        # # if (distance_to_goal < self.distance_to_goal_thresh):
+        # #     print('\n\nWe have reached the goal (within distance to goal threshold)\n\n')
+        # #     print(self.TrainingData)  
+        # #     rospy.signal_shutdown('Shutdown')
+
+        # if (distance_to_goal < self.distance_to_goal_thresh): # I.e. the best action is to not move (we have reached the goal), 
+        # # or we are simply trying to slow down a little bit. For the latter case, we don't want to do anything in this if statement, just continue the sim. So we 
+        # # also check in this if statement if the goal has actually been reached.
+
+        #     # while(True):
+        #     #     self.publish_action(acc_to_RateThrust([0, 0, 0])) # Stop for a little bit
+        #     #     rospy.sleep(0.5)
+
+        #     if (self.Mode == 'Train'):
+        #         with open (self.save_dir + 'TrainingDataRIs.txt', 'ab') as f:
+        #             np.savetxt(f, self.TrainingDataRIs, fmt='%.5f')
+        #         with open (self.save_dir + 'TrainingDataEncodedRIs.txt', 'ab') as f:
+        #             np.savetxt(f, self.TrainingDataEncodedRIs, fmt='%.5f')
+        #         with open (self.save_dir + 'TrainingDataLabels.txt', 'ab') as f:
+        #             np.savetxt(f, self.TrainingDataLabels, fmt='%.5f')
+            
+        #     self.TrainingDataRIs *= 0
+        #     self.TrainingDataEncodedRIs *= 0
+        #     self.TrainingDataLabels *= 0
+
+        #     self.Reward.ResetPlot()
+
+        #     if (self.GoalPoint_rf == [0, 0, 2]):
+
+        #         x = np.random.uniform(low=0, high=28)
+        #         y = np.random.uniform(low=-1, high=0.5)
+        #         z = np.random.uniform(low=0.8, high=2.8)
+
+        #         self.GoalPoint_rf = [x, y, z]
+        #         self.Reward.SetGoalPoint(self.GoalPoint_rf)
+        #         self.save_data = 'y'
         
-        self.Reward.SetLookaheadDepth(2)
-        reward_input_list = self.Reward.CreateRewardInputList(start_point, initial_velocity)
+        #     elif (self.GoalPoint_rf != [0, 0, 2]):
+        #         self.GoalPoint_rf = [0, 0, 2]
+        #         self.save_data = 'n'
 
-        # self.Reward.SetRewardInputList(reward_input_list)
-        best_action_index, best_reward = self.Reward.GetBestRewardIndex(
-            reward_input_list, LookaheadDepth=self.Reward.LookaheadDepth, gamma=0.9, plot_rewards=True
-        )
+        
+        # elif (self.Mode=='Test' and distance_to_goal < self.distance_to_goal_thresh): # This is how we stop the robot in test mode (using the net)
+        # # when it has reached it's goal
+        #     print('\nEnter new goal point in format [x, y, z]: ')
+        #     self.GoalPoint_rf = input()
+        #     print('\nEnter whether or not to save collected training information unitl the next step, y or n: ')
+        #     self.save_data = input()
 
-        BestAction = self.PossibleActions[best_action_index]
-        best_end_point_rf = get_pose_after_action(start_point, initial_velocity, BestAction)
-
-
-        return BestAction, best_end_point_rf # Note that we return the best end point in terms of the robot frame, so we can publish it.
-
-
-    def getBestActionWF(self, start_point=[0, 0, 0]):
-        BestAction = self.PossibleActions[0]
-        best_end_point_rf = get_pose_after_action(start_point, BestAction)
-        # Now convert best_end_point_rf from robot frame to world frame.
-        # We convert this endpoint to pose stamped message and transform it to world frame:
-        best_end_point_rf_ps = xyz_2_PoseStamped(best_end_point_rf)
-        best_end_point_wf_ps = self.RF_to_WF(best_end_point_rf_ps)
-        # Now convert pose stamped message to xyz array (just position in world frame now)
-        best_end_point_wf = pose_2_np_arr_xyz(best_end_point_wf_ps.pose)
-
-        for action in self.PossibleActions:
             
-            # first find endpoint in robot frame after taking current action:
-            end_point_rf = get_pose_after_action(start_point, action)
-            # Next convert this endpoint to pose stamped message 
+        # ## At this point we must account for offset in the low-level controller (z axis):
+        # # The offset is roughly 0.16 m:
+        # # end_point_rf[2] = end_point_rf[2] + 0.137
+        # ## Now we convert endpoint to PoseStamped message:
+        # # end_point_wf_ps = xyz_2_PoseStamped(end_point_wf)
+        # action_rf_rt = acc_to_RateThrust(action_rf)
+        # end_point_rf_ps = xyz_2_PoseStamped(end_point_rf)
+
+
+
+
+        # if (self.save_data == 'y'):
+        #     self.add_to_training_data(action_rf)
+
+        # if (euclidean_dist(curr_pose, [0.0, 0.0, 0.0]) < 0.2): # This is for the purpose of goin up a little bit before starting the real sim
+        #     point_rf = [0, 0, 1]
+        #     print('\nInstead, moving to point ', point_rf)
+        #     self.PosePublisher(xyz_2_Pose(point_rf))
+        # else:
+        #     self.publish_action(action_rf_rt)
+
+
+        # self.prev_publish_time = rospy.get_time()
+
+        return

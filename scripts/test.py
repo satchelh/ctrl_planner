@@ -1,59 +1,72 @@
 #!/usr/bin/env python
+from depthmapper.msg import DepthMap_msg
+import rospy
 
-# import heapq
-# import random
-# import time
+import sys
+sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
 
-# def createArray():
-#     array = range( 10 * 1000 * 1000 )
-#     random.shuffle( array )
-#     return array
-
-# def linearSearch( bigArray, k ):
-#     return sorted(bigArray, reverse=True)[:k]
-
-# def heapSort( List, k ):
-#     heap = []
-#     # Note: below is for illustration. It can be replaced by 
-#     # return heapq.nlargest( List, k )
-#     for item in List:
-#         # If we have not yet found k items, or the current item is larger than
-#         # the smallest item on the heap,
-#         if len(heap) < k or item > heap[0]:
-#             # If the heap is full, remove the smallest element on the heap.
-#             if len(heap) == k: heapq.heappop( heap )
-#             # add the current element as the new smallest.
-#             heapq.heappush( heap, item )
-#     return heap
-
-# start = time.time()
-# bigArray = createArray()
-# print "Creating array took %g s" % (time.time() - start)
-
-# start = time.time()
-# print linearSearch( bigArray, 10 )    
-# print "Linear search took %g s" % (time.time() - start)
-
-# start = time.time()
-# print heapSearch( bigArray, 10 )    
-# print "Heap search took %g s" % (time.time() - start)
-
-from sensor_msgs.msg import PointCloud2
-from sensor_msgs.point_cloud2 import read_points
-import numpy as np
-
-def pcl_callback(pcl_msg):
+from AutoEncoder import *
+from ActorCritic import *
 
 
-def get_distance_to_closest_point(pc):
+tf.compat.v1.disable_eager_execution()
+session = tf.compat.v1.Session()
+tf.compat.v1.keras.backend.set_session(session)
+ActorCritic = ActorCritic(session)
+
+AutoEncoder = AutoEncoder()
+AutoEncoder.load_model()
+# AutoEncoder.encoder._make_predict_function()
+
+rospy.init_node('test')
+
+TrainingData = []
+
+def RangeImageCallback(data):
+    # rospy.loginfo("Recieved Range Image")
+    # print(data.map.data[0])
+    range_image = data.map.data 
+
+    range_image = np.reshape(range_image, (16, 90))
+
+    range_image = np.expand_dims(range_image, -1)
+    range_image = np.expand_dims(range_image, 0)
+
+    # tf.compat.v1.enable_eager_execution()
+    with session.as_default():
+        with session.graph.as_default():
+            encoded_RI = AutoEncoder.encoder.predict(range_image)
     
-    points = np.array(list(read_points(pc)))
-    xyz = np.array([(x, y, z) for x, y, z, _, _ in points]) # assumes XYZIR
-    r = np.linalg.norm(xyz, axis=-1)
-    return np.min(r)
+            encoded_RI_with_GP = np.append(encoded_RI[0], [0, 0, 1], axis=0)
+            # encoded_RI_with_GP = np.expand_dims(encoded_RI_with_GP, -1)
+            encoded_RI_with_GP = np.expand_dims(encoded_RI_with_GP, 0)
+            
+            action = ActorCritic.act(encoded_RI_with_GP)
+            print(action)
+    
+            reward = 1
+            # encoded_RI_with_GP = np.squeeze(encoded_RI_with_GP, 0)
+            curr_state = encoded_RI_with_GP
+            new_state = encoded_RI_with_GP
 
-
+            TrainingData.append([curr_state, action, reward, new_state])
+            print('\nRetraining with ' + str(len(TrainingData)) + ' samples.\n\n')
+            ActorCritic.train(TrainingData)
+            
+    # tf.compat.v1.disable_eager_execution()
+    # rospy.sleep(1)
+    return
+    
 
 rospy.Subscriber(
-        '/velodyne_points', PointCloud2, pcl_callback,
-    )
+    '/depth_map', DepthMap_msg, RangeImageCallback,
+)
+
+rospy.spin()
+
+# import numpy as np
+
+# List = [1, 2, 3]
+# List = np.expand_dims(List, 0)
+# print(List)
+# print(np.squeeze(List, 0))
