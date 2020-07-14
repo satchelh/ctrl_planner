@@ -319,6 +319,8 @@ class SimulationClass():
         rospy.loginfo('Placing robot')
         self.ResetPublisher.publish(new_position)
 
+        return 
+
         # self.reset_timer()
 
         # rospy.loginfo('Unpausing physics')
