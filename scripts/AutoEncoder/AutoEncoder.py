@@ -14,7 +14,7 @@ class AutoEncoder():
 
         self.img_dim = img_dim
 
-        self.data_file_dir = '/home/satchel/ctrl_ws/src/ctrl_planner/training_data/TrainingDataFVs.txt'
+        self.data_file_dir = '/home/satchel/ctrl_ws/src/ctrl_planner/training_data/EncodedRIs.txt'
 
         FlattenedTrainingData, self.TrainingData = self.load_data(self.data_file_dir)
         self.TrainingData = np.expand_dims(self.TrainingData, -1)
@@ -38,7 +38,7 @@ class AutoEncoder():
         self.autoencoder.compile(optimizer='adam', loss='mse') # Mean squared error loss
         # decoder.compile(optimizer='adam', loss='mse', metrics=['accuracy']) # Mean squared error loss
 
-        print(self.autoencoder.summary())
+        # print(self.autoencoder.summary())
 
         return 
 

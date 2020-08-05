@@ -13,7 +13,7 @@ from sensor_msgs.msg import PointCloud2
 from sensor_msgs.point_cloud2 import read_points
 # from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
 
-ActionTime = 0.28
+ActionTime = 1.4
 
 def xyz_2_PoseStamped(xyz, angles=None):
     """

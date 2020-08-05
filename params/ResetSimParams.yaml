@@ -1,4 +1,2 @@
-goal_generation_radius: 1 # m
-waypoint_radius: 0.1 # m
-robot_collision_frame: 'delta::delta/base_link::delta/base_link_fixed_joint_lump__delta_collision_collision'
+robot_collision_frame: 'elios::elios/base_link::elios/base_link_fixed_joint_lump__elios_collision_collision_1'
 ground_collision_frame: 'ground_plane::link::collision'

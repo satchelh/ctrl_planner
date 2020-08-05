@@ -10,6 +10,7 @@ from std_srvs.srv import Empty, EmptyRequest
 from tensorflow.keras import backend as K
 
 import sys
+import csv
 
 sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
 
@@ -19,12 +20,12 @@ tf.compat.v1.disable_eager_execution()
 
 class SimulationClass():
 
-    def __init__(self, GoalPoint, Mode='Train', Network=None):
+    def __init__(self, GoalPoint, Mode='Train', StartWithWeights=False):
 
         self.GoalPoint_rf = GoalPoint
-        self.StartPoint_rf = [3, 0, 1]
+        self.StartPoint_rf = [2, 0, 2]
         self.Mode = Mode
-        self.Network = Network
+        self.StartWithWeights = StartWithWeights
         self.AutoEncoder = AutoEncoder()
         self.AutoEncoder.load_model()
 
@@ -34,16 +35,15 @@ class SimulationClass():
         self.TrainingData = []
         self.TrainingDataRIs = [] # This will be the list of state values collected during simulation, 
         # where state is our range image and action is the selected 3d accleration
-        self.TrainingDataEncodedRIs = []
-
-        self.TrainingDataLabels = [] # And this will be the list of respective action values collected during simulation, 
-        # where action is the selected 3d accleration
+        self.EncodedRIs = []
+        self.save_dir = '/home/satchel/ctrl_ws/src/ctrl_planner/training_data/'
+        self.TrainingDataLabels = [] 
 
         self.PoseList = []
 
         self.MaxPointCLoudListSize = 3
         self.MaxRangeImageListSize = 3
-        self.MaxPoseListSize = 3
+        self.MaxPoseListSize = 1
         self.VelocityList = [] # To store most recent velocity 
         self.PossibleActions = PossibleActions
 
@@ -55,8 +55,12 @@ class SimulationClass():
         self.topic_odom = '/' + self.model_name + '/ground_truth/odometry'
         self.topic_contact = '/' + self.model_name + '/' + self.model_name + '_contact'
         # frames:
-        self.robot_collision_frame = None
-        self.ground_collision_frame = None
+        self.robot_collision_frame = rospy.get_param(
+            'robot_collision_frame',
+            'elios::elios/base_link::elios/base_link_fixed_joint_lump__elios_collision_collision_1'
+        )
+        self.ground_collision_frame = rospy.get_param(
+            'ground_collision_frame', 'ground_plane::link::collision')
         # publishers:
         self.PosePublisher = rospy.Publisher(
             '/elios_VLP16/goal', Pose, queue_size=1,
@@ -73,41 +77,59 @@ class SimulationClass():
         self.ActorCritic = ActorCritic(self.session)
 
         self.curr_iteration = 0
-        self.MAX_ITERATIONS_PER_EPISODE = 40
+        self.curr_episode = 0
+        self.new_episode = False
+        self.MAX_ITERATIONS_PER_EPISODE = 2
+        self.NUM_EPISODES_BEFORE_SWITCH = 16
+        self.NUM_EPISODES_BEFORE_DECAY = self.NUM_EPISODES_BEFORE_SWITCH - 8
         self.epsilon = 1.0
-        self.epsilon_decay = 0.95
+        self.epsilon_decay = 0.90
 
-        self.Reward = Reward(self.GoalPoint_rf)
+        self.Reward = Reward(self.StartPoint_rf, self.GoalPoint_rf)
+        self.Top5RewardActions = []
+        self.collision = False
 
         self.ResetSim()
+
+        if self.Mode == 'Test' or self.StartWithWeights:
+            self.ActorCritic.load_model()
+
+        self.StepCounterForPlot = 0
 
         self.init_subscribers()
     
 
     def init_subscribers(self):
         """ initialize ROS subscribers and publishers """
-        # subscribers
-        rospy.Subscriber(
-            self.topic_point_cloud, PointCloud2, self.PointCloudCallback,
-        )
 
-        rospy.Subscriber(
-            self.topic_range_img, DepthMap_msg, self.RangeImageCallback,
-        )
+        rospy.sleep(0.5)
 
-        rospy.Subscriber(
-            self.topic_odom, Odometry, self.callback_odom, 
-        )
+        while not rospy.is_shutdown():
 
-        rospy.Subscriber(
-            self.topic_contact, ContactsState, self.contact_callback
-        )
+            rospy.Subscriber(
+                self.topic_point_cloud, PointCloud2, self.PointCloudCallback,
+            )
 
-        # rospy.Subscriber(
-        #     self.topic_pose, Pose, self.callback_pose, 
-        # )
+            rospy.Subscriber(
+                self.topic_range_img, DepthMap_msg, self.RangeImageCallback,
+            )
 
-        rospy.spin() # spin() simply keeps python from exiting until this node is stopped
+            rospy.Subscriber(
+                self.topic_odom, Odometry, self.callback_odom, 
+            )
+
+            # rospy.Subscriber(
+            #     self.topic_contact, ContactsState, self.contact_callback
+            # )
+
+            # rospy.Subscriber(
+            #     self.topic_pose, Pose, self.callback_pose, 
+            # )
+
+            rospy.sleep(0.2)
+            self.find_and_publish_next_action()
+
+        # rospy.spin() # spin() simply keeps python from exiting until this node is stopped
 
         
         return
@@ -127,8 +149,8 @@ class SimulationClass():
         # print(data.map.data[0])
         range_image = data.map.data 
 
-        if (self.Mode == 'Test'):
-            range_image = np.reshape(range_image, (16, 90))
+        # if (self.Mode == 'Test'):
+        #     range_image = np.reshape(range_image, (16, 90))
         
         self.RangeImageList.insert(0, range_image)
 
@@ -155,8 +177,10 @@ class SimulationClass():
 
         if len(self.PoseList) > self.MaxPoseListSize:
             self.PoseList.pop()
+        
+        # print(self.PoseList[0])
 
-        self.find_and_publish_next_action()
+        # self.find_and_publish_next_action()
         
         return
 
@@ -164,14 +188,16 @@ class SimulationClass():
         # Check inside the models states for robot's contact state
         for i in range(len(msg.states)):
             if (msg.states[i].collision1_name == self.robot_collision_frame):
+                print('FUCKFUCKFUCKFUCKFUCKFUCKFUCKFUCKFUCK')
                 rospy.logdebug('Contact found!')
-                if (msg.states[i].collision2_name ==
-                        self.ground_collision_frame):
-                    rospy.logdebug('Robot colliding with the ground')
-                else:
-                    rospy.logdebug(
-                        'Robot colliding with something else (not ground)')
-                    self.reset_sim()
+                self.collision = True
+                # if (msg.states[i].collision2_name == self.ground_collision_frame):
+                #     rospy.logdebug('Robot colliding with the ground')
+                #     self.reset_sim()
+                # else:
+                #     rospy.logdebug(
+                #         'Robot colliding with something else (not ground)')
+                #     self.reset_sim()
             else:
                 rospy.logdebug('Contact not found yet ...')
 
@@ -188,8 +214,9 @@ class SimulationClass():
         encoded_RI = self.AutoEncoder.encoder.predict(RI)
 
         encoded_RI_with_GP = np.append(encoded_RI[0], self.GoalPoint_rf, axis=0)
+        encoded_RI_with_GP_and_vel = np.append(encoded_RI_with_GP, self.VelocityList[0], axis=0)
 
-        return encoded_RI_with_GP
+        return encoded_RI_with_GP_and_vel
 
     
     def add_to_training_data(self, prev_RI, action, reward, curr_RI=None):
@@ -205,9 +232,7 @@ class SimulationClass():
 
         self.TrainingData.append([encoded_prev_RI, action, reward, encoded_curr_RI]) # This is our main result
 
-        self.TrainingDataEncodedRIs.append(encoded_prev_RI)
-
-        self.TrainingDataLabels.append(self.PossibleActions.index(action))
+        self.EncodedRIs.append(encoded_prev_RI)
 
 
     def publish_action(self, rate_thrust_msg):
@@ -239,33 +264,68 @@ class SimulationClass():
 
                 with self.session.graph.as_default():
 
-                    if self.curr_iteration % self.MAX_ITERATIONS_PER_EPISODE == 0: # Retrain
-                        # First stop the robot:
-                        self.ResetSim()
+                    print('CURRENT EPISODE: ' + str(self.curr_episode + 1))
+
+                    if self.new_episode and self.curr_episode % self.NUM_EPISODES_BEFORE_SWITCH >= self.NUM_EPISODES_BEFORE_DECAY: # Retrain when we start a new episode.
+            
+                        # self.curr_episode += 1
+
+                        self.epsilon *= self.epsilon_decay
+
                         curr_pose = self.get_current_pose_xyz()
-                        curr_pose_msg = xyz_2_Pose(curr_pose)
-                        self.PosePublisher.publish(curr_pose_msg)
+
+                        if (self.curr_episode + 1) % self.NUM_EPISODES_BEFORE_SWITCH == 0:
+                            self.StartPoint_rf = curr_pose
+                            # self.Reward.SetStartPoint(self.StartPoint_rf)
+                            self.epsilon = 1.0
+                            self.Top5RewardActions *= 0
+                            self.ResetSim()
+                        
+                        # Stop the robot:
+                        self.ResetSim()
+                        temp_action = [0, 0, 0]
+                        temp_action_msg = acc_to_RateThrust(temp_action)
+                        self.RateThrustPublisher.publish(temp_action_msg)
+                        # curr_pose = self.get_current_pose_xyz()
+                        # curr_pose_msg = xyz_2_Pose(curr_pose)
+                        # self.PosePublisher.publish(curr_pose_msg)
                         
 
                         print('\nRetraining with ' + str(len(self.TrainingData)) + ' samples.\n\n')
                         rospy.sleep(1)
-                        self.ActorCritic.train(self.TrainingData, iterations=1)
+
+                        if self.epsilon == 1.0:
+                            self.ActorCritic.train(self.TrainingData, iterations=100)
+                        elif self.epsilon < 1.0:
+                            self.ActorCritic.train(self.TrainingData, iterations=10)
 
                         while self.ActorCritic.DoneTraining == False:
                             
                             continue
-                            # curr_pose = self.get_current_pose_xyz()
-                            # curr_pose_msg = xyz_2_Pose(curr_pose)
-                            # self.PosePublisher.publish(curr_pose_msg)
+                            
                         
-
                         # rospy.sleep(5)
                         self.ActorCritic.DoneTraining = False
-                        if self.curr_iteration % self.MAX_ITERATIONS_PER_EPISODE == 3: # i.e. only after 3 epochs 
-                        # of training with random actions do we start using predicitons from our actor net.
-                            self.epsilon *= self.epsilon_decay
 
+                        with open (self.save_dir + 'TrainingData.csv', 'ab') as csvfile:
+                            writer = csv.writer(csvfile)
+                            for data_sample in self.TrainingData:
+                                writer.writerow(data_sample)
+                        # with open (self.save_dir + 'EncodedRIs.txt', 'ab') as f:
+                        #     np.savetxt(f, self.EncodedRIs, fmt='%.5f')
+
+
+                        self.TrainingData *= 0
+
+                        # if self.curr_episode >= self.NUM_EPISODES_BEFORE_DECAY: # i.e. only after NUM_EPISODES_BEFORE_DECAY
+                        # # epochs of training with random actions do we start using predicitons from our actor net.
+                        #     self.epsilon *= self.epsilon_decay
+                        
+                        self.ActorCritic.save_model()
+                        
                     else:       
+
+                        self.ResetSim()
 
                         curr_state = self.encode_RI(curr_RI)
                 
@@ -273,53 +333,105 @@ class SimulationClass():
                         
                         action_rf = self.ActorCritic.act(curr_state, self.epsilon)
                         action_rf = action_rf[0]
+                        action_rf[2] = 0.0
+                        action_rf[1] = 0.0
 
-                        start_time = rospy.get_time()
                         action_rf_rt = acc_to_RateThrust(action_rf)
                         self.publish_action(action_rf_rt) # Here publish action
+                        # start_time = rospy.get_time()
 
-                        print('Taking action ', action_rf)
-                        while (rospy.get_time() - start_time) < ActionTime:
-                            continue
+                        # print('Taking action ', action_rf)
+                        # while (rospy.get_time() - start_time) < ActionTime:
+                        #     continue
+                        rospy.sleep(ActionTime)
                 
                         new_state = self.encode_RI(self.RangeImageList[0])
                         new_state = np.expand_dims(new_state, 0)
                         curr_pose = self.get_current_pose_xyz()
                         curr_pcl = self.PointCloudList[0]
                         curr_lin_vel = self.VelocityList[0]
-                        reward = self.Reward.GetReward(curr_pose, curr_pcl, curr_lin_vel)
+                        # print(self.collision)
+                        reward = self.Reward.GetReward(curr_pose, curr_pcl, curr_lin_vel, self.collision)
+                        # print(curr_pose)
+
+                        self.collision = False
 
                         action_rf = np.expand_dims(action_rf, 0)
 
+
                         self.TrainingData.append([curr_state, action_rf, reward, new_state])
-                        
-                        self.curr_iteration+=1
+                    
 
-    def ResetSim(self):
-        # rospy.loginfo('Pausing physics')
-        # self.pause_physics_proxy(EmptyRequest())
+                    self.curr_iteration += 1
+                    if self.curr_iteration % self.MAX_ITERATIONS_PER_EPISODE == 0:
+                        self.new_episode = True
+                        self.curr_episode +=1
+                        if self.epsilon < 0.8:
+                            self.StepCounterForPlot += 1
+                            self.PlotRewardRealTime(self.StepCounterForPlot, reward)
+                    else:
+                        self.new_episode = False
 
-        # Fill in the new position of the robot
-        new_position = ModelState()
-        new_position.model_name = self.model_name
-        new_position.reference_frame = 'world'
-        new_position.pose.position.x = self.StartPoint_rf[0]
-        new_position.pose.position.y = self.StartPoint_rf[1]
-        new_position.pose.position.z = self.StartPoint_rf[2]
-        new_position.pose.orientation.x = 0
-        new_position.pose.orientation.y = 0
-        new_position.pose.orientation.z = 0
-        new_position.pose.orientation.w = 1
-        new_position.twist.linear.x = 0
-        new_position.twist.linear.y = 0
-        new_position.twist.linear.z = 0
-        new_position.twist.angular.x = 0
-        new_position.twist.angular.y = 0
-        new_position.twist.angular.z = 0
-        rospy.loginfo('Placing robot')
-        self.ResetPublisher.publish(new_position)
+        elif (self.Mode == 'Test'):
 
-        return 
+            curr_state = self.encode_RI(curr_RI)
+            curr_state = np.expand_dims(curr_state, 0)
+            action_rf = self.ActorCritic.act(curr_state, 0.0)
+            action_rf = action_rf[0]
+            action_rf[2] = 0.0
+            action_rf[1] = 0.0
+
+            action_rf_rt = acc_to_RateThrust(action_rf)
+            self.publish_action(action_rf_rt) # Here publish action
+
+            rospy.sleep(0.5)
+
+            temp_action = [0, 0, 0]
+            temp_action_msg = acc_to_RateThrust(temp_action)
+            self.RateThrustPublisher.publish(temp_action_msg)
+            curr_pose = self.get_current_pose_xyz()
+            curr_pose_msg = xyz_2_Pose(curr_pose)
+            self.PosePublisher.publish(curr_pose_msg)
+            self.RateThrustPublisher.publish(temp_action_msg)
+            # self.RateThrustPublisher.publish(temp_action_msg)
+            rospy.sleep(1)
+
+
+
+    def AddToTop5(self, action, reward):
+
+        # Note that this assumes that the Top5RewardActions is in order least (loc 0) to greatest (loc 4)
+        Added = False
+
+        if len(self.Top5RewardActions < 5):
+            self.Top5RewardActions.append([action, reward])
+            Added = True
+        elif len(self.Top5RewardActions == 5) and reward > self.Top5RewardActions[0][1]:
+            self.Top5RewardActions[0] = [action, reward]
+            Added = True
+        
+        if Added:
+            self.Top5RewardActions.sort(key=lambda pair: pair[1])
+
+        return Added
+
+
+    
+    def PlotRewardRealTime(self, epoch, reward):
+
+        plt.plot(epoch, reward, 'ro')
+
+        plt.title('1 Step Lookahead Weighted Real Time Reward')
+
+        plt.xlabel('Epoch')
+        plt.ylabel('Reward')
+
+        plt.xlim([0, epoch])
+        plt.ylim([-200, 550])
+
+        plt.draw()
+        plt.pause(0.2)
+
 
         # self.reset_timer()
 
@@ -452,3 +564,29 @@ class SimulationClass():
         # self.prev_publish_time = rospy.get_time()
 
         return
+
+    def ResetSim(self):
+        # rospy.loginfo('Pausing physics')
+        # self.pause_physics_proxy(EmptyRequest())
+
+        # Fill in the new position of the robot
+        new_position = ModelState()
+        new_position.model_name = self.model_name
+        new_position.reference_frame = 'world'
+        new_position.pose.position.x = self.StartPoint_rf[0]
+        new_position.pose.position.y = self.StartPoint_rf[1]
+        new_position.pose.position.z = self.StartPoint_rf[2]
+        new_position.pose.orientation.x = 0
+        new_position.pose.orientation.y = 0
+        new_position.pose.orientation.z = 0
+        new_position.pose.orientation.w = 1
+        new_position.twist.linear.x = 0
+        new_position.twist.linear.y = 0
+        new_position.twist.linear.z = 0
+        new_position.twist.angular.x = 0
+        new_position.twist.angular.y = 0
+        new_position.twist.angular.z = 0
+        # rospy.loginfo('Placing robot')
+        self.ResetPublisher.publish(new_position)
+
+        return 

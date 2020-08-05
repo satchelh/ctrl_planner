@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 import random
 
+import time
 import sys
 
 sys.path.insert(1, '/home/satchel/ctrl_ws/src/ctrl_planner/scripts/AutoEncoder')
@@ -16,7 +17,7 @@ from CustomTrainingCallback import *
 
 tf.compat.v1.disable_eager_execution()
 
-EncodedTrainingData = np.loadtxt('/home/satchel/ctrl_ws/src/ctrl_planner/training_data/TrainingDataEncodedRIs.txt').astype(float)
+# EncodedTrainingData = np.loadtxt('/home/satchel/ctrl_ws/src/ctrl_planner/training_data/TrainingDataEncodedRIs.txt').astype(float)
 
 X = np.arange(-0.3, 0.3, 0.1).tolist()
 Y = np.arange(-0.2, 0.2, 0.1).tolist()
@@ -38,12 +39,12 @@ class ActorCritic():
     def __init__(self, sess):
 
         self.PossibleActions = PossibleActions
-        self.FVs = EncodedTrainingData
+        self.StateSize = 326
         self.sess = sess        
-        self.learning_rate = 0.001
+        self.learning_rate = 0.1
         self.epsilon = 1.0
-        self.epsilon_decay = .93
-        self.gamma = .05
+        self.epsilon_decay = .94
+        self.gamma = 0.9 # .90
         self.tau   = .125
         self.memory = deque(maxlen=2000)
 
@@ -67,7 +68,7 @@ class ActorCritic():
         #     self.actor_grads = tape.gradient(self.actor_model.output, actor_model_weights)
         self.actor_grads = tf.gradients(ys=self.actor_model.output, # Take the gradient of actor_model.ouput (action) with respect to it's weights actor_model_weights.
             xs=actor_model_weights, grad_ys=-self.actor_critic_grad) # Here the -self.actor_critic_grad has the same length as actor_model.output (i.e. number of possible 
-        # actions). Essentially this term will 'weight' the gradients for each ouput differently, which means each output's gradient will be multiplied by the negation (see
+        # actions). Essentially this term will 'weight' the gradients for each output differently, which means each output's gradient will be multiplied by the negation (see
         # - sign) of its respective 'initial gradient' value in this self.actor_critic_grad term. The reason we use a minus sign here is because we want to use gradient ASCENT
         # rather than descent for the purpose of our actor crtic structure. To explain this further:
         #
@@ -100,22 +101,32 @@ class ActorCritic():
 
         # Initialize for later gradient calculations
         self.sess.run(tf.compat.v1.global_variables_initializer())
-        # tf.global_variables_initializer()
+        # print('\n\n\n\n\n\n\n')
+        # test_state = np.random.uniform(-100.0, 100.0, self.StateSize)
+        # test_state = np.expand_dims(test_state, axis=0)
+        # act = self.actor_model.predict(test_state)
+        # print(act[0])
+        # print(self.critic_model.predict([test_state, act]))
+        # print('\n\n\n\n\n\n\n')
         ############################################
 
     def create_actor_model(self):
 
-        input_dim   = len(self.FVs[0])
+        k_initializer = tf.keras.initializers.RandomUniform(minval=-0.08, maxval=0.08)
+        b_initializer = tf.keras.initializers.Zeros()
+
+        input_dim   = self.StateSize
         state_input = layers.Input(input_dim)
 
-        layer_1     = layers.Dense(12, activation='relu')(state_input)
-        layer_2     = layers.Dense(24, activation='relu')(layer_1)
-        layer_3     = layers.Dense(12, activation='relu')(layer_2)
-        layer_4     = layers.Dense(3, activation='tanh')(layer_3) # layers.Dense(len(self.PossibleActions), activation='relu')(layer_3)
+        layer_0     = layers.Dense(128, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(state_input)
+        layer_1     = layers.Dense(64, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(layer_0)
+        layer_2     = layers.Dense(32, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(layer_1)
+        layer_3     = layers.Dense(12, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(layer_2)
+        layer_4     = layers.Dense(3, activation='tanh', kernel_initializer=k_initializer, bias_initializer=b_initializer)(layer_3) # layers.Dense(len(self.PossibleActions), activation='relu')(layer_3)
         # final_layer = layers.Activation('softmax')(layer_4)
 
         model = Model(
-            inputs=state_input, outputs=layer_4
+            inputs = state_input, outputs=layer_4
         )
         # model = models.Sequential()
         # input_layer_model = layers.InputLayer(input_dim)
@@ -156,7 +167,7 @@ class ActorCritic():
         # that since we have, say 18 possible actions for our agent (acceleration vectors), we should put 18 here. We'll then use softmax on these 18 outputs like in the neural 
         # network built in ML class. Softmax's purpose here would be to give us 18 probablites, one for each action (label):
 
-        adam = Adam(lr=0.001)
+        adam = Adam(lr=self.learning_rate)
 
         model.compile(optimizer=adam,
             loss='mse',
@@ -170,36 +181,38 @@ class ActorCritic():
     
     def create_critic_model(self):
 
-        state_input_dim = len(self.FVs[0])
-        state_input = layers.Input(shape=state_input_dim)
+        k_initializer = tf.keras.initializers.RandomUniform(minval=-0.08, maxval=0.08)
+        b_initializer = tf.keras.initializers.Zeros()
 
-        action_input_dim = 3
-        action_input = layers.Input(shape=action_input_dim)
+        state_input_dim    = self.StateSize
+        state_input        = layers.Input(shape=state_input_dim)
 
-        state_layer_1 = layers.Dense(24, activation='relu')(state_input)
-        state_layer_2 = layers.Dense(12, activation='relu')(state_layer_1)
+        action_input_dim   = 3
+        action_input       = layers.Input(shape=action_input_dim)
+
+        state_layer_1      = layers.Dense(24, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(state_input)
+        state_layer_2      = layers.Dense(12, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(state_layer_1)
         # state_layer_2 = layers.Dense(48, activation='relu')(state_layer_1)
         # state_layer_3 = layers.Dense(24, activation='relu')(state_layer_2)
 
 
-        action_layer_1 = layers.Dense(24, activation='relu')(action_input)
-        action_layer_2 = layers.Dense(12, activation='relu')(action_layer_1)
+        action_layer_1     = layers.Dense(24, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(action_input)
+        action_layer_2     = layers.Dense(12, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(action_layer_1)
 
         merged = Add()(
             [state_layer_2, action_layer_2] # Here we are simly element-wise adding these seperate layers together. Note then that the
             # layers must have the save length/size.
         )
 
-        merged_layer_1 = layers.Dense(24, activation='relu')(merged)
-
-        final_output_layer = layers.Dense(1)(merged_layer_1)
+        merged_layer_1     = layers.Dense(12, activation='relu', kernel_initializer=k_initializer, bias_initializer=b_initializer)(merged)
+        final_output_layer = layers.Dense(1, kernel_initializer=k_initializer, bias_initializer=b_initializer)(merged_layer_1)
 
         model = Model(
             inputs=[state_input, action_input], outputs=final_output_layer
         )
 
-        adam = Adam(lr=0.001)
-        model.compile(loss="mse", optimizer=adam)
+        adam = Adam(lr=self.learning_rate)
+        model.compile(loss="mse", optimizer=adam, metrics=['accuracy'])
         # print('\nCRITIC STRUCTURE:')
         # model.summary()
 
@@ -208,6 +221,7 @@ class ActorCritic():
 
     def train(self, ac_input_lists, iterations): # Here ac_input_lists will contain element of the form [old_state, action, reward, new_state]
 
+        self.StateSize = len(ac_input_lists[0][0])
         for iteration in range (iterations):
 
             self.train_critic(ac_input_lists)
@@ -230,7 +244,10 @@ class ActorCritic():
             # target_action_index = np.argmax(self.actor_model.predict(new_state))
 
             # target_action = self.PossibleActions[target_action_index]
+            start_time = time.time()
             target_action = self.actor_model.predict(new_state)
+            actor_inference_time = time.time() - start_time
+            # print('\n\n\n\n\n' + str(actor_inference_time) + '\n\n\n\n')
             # print('\n\n\nTarget Action: ', target_action, '\n\n\n\n\n')
             target_action = np.array(target_action)
             # target_action = np.expand_dims(target_action, 0)
@@ -238,8 +255,9 @@ class ActorCritic():
             future_reward = self.critic_model.predict([new_state, target_action])#[0][0]
             # print(future_reward)
 
+            print('Original Reward: ' + str(reward))
             reward += self.gamma * future_reward
-            print('Reward: ' + str(reward))
+            print('Reward with future reward: ' + str(reward))
             
             action = np.array(action)
 
@@ -287,15 +305,33 @@ class ActorCritic():
 
         return
 
+    def save_model(self, model_dir='/home/satchel/ctrl_ws/src/ctrl_planner/scripts/ActorCritic/weights/'):
+        actor_fn = model_dir + "actor_weights"
+        critic_fn = model_dir + "critic_weights"
+
+        print('\nWEIGHTS BEFORE SAVING:\n', self.actor_model.get_weights()[0][0][0])
+        self.actor_model.save_weights(actor_fn)
+        self.critic_model.save_weights(critic_fn)
+        return actor_fn, critic_fn
     
+    def load_model(self,
+            actor_fn='/home/satchel/ctrl_ws/src/ctrl_planner/scripts/ActorCritic/weights/actor_weights',
+            critic_fn='/home/satchel/ctrl_ws/src/ctrl_planner/scripts/ActorCritic/weights/critic_weights'
+        ):
+        print('\nWEIGHTS BEFORE RESTORE:\n', self.actor_model.get_weights()[0][0][0])
+        self.actor_model.load_weights(actor_fn)
+        self.critic_model.load_weights(critic_fn)
+        print('\nWEIGHTS AFTER RESTORE:\n', self.actor_model.get_weights()[0][0][0])
+        return
+
     def act(self, cur_state, epsilon):
 
         print('Epsilon: ' + str(epsilon))
 
         if np.random.random() < epsilon:
-            x = random.uniform(-0.3, 0.3)
-            y = random.uniform(-0.2, 0.2)
-            z = random.uniform(-0.1, 0.1)
+            x = random.uniform(-1.0, 1.0)
+            y = random.uniform(-0.4, 0.4)
+            z = 0 # random.uniform(-0.1, 0.1)
             # rand_selected_action = random.choice(self.PossibleActions)
             rand_selected_action = [x, y, z]
             rand_selected_action = np.expand_dims(rand_selected_action, 0)

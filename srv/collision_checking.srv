@@ -1,0 +1,9 @@
+# request to check whether a path is collision-free
+# trajectory_msgs/MultiDOFJointTrajectory end
+geometry_msgs/Pose end
+geometry_msgs/Pose start
+#geometry_msgs/PoseWithCovarianceStamped start
+---
+bool is_collision_free
+int32 num_occupied_voxel
+int32 num_free_voxel

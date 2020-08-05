@@ -1,14 +1,8 @@
 <launch>
-
+    
     <include file="$(find rotors_gazebo)/launch/elios.launch">
         <arg name="mav_name" default="elios"/>
-        <arg name="world_name" default="comstock"/>
+        <arg name="world_name" default="$(find rotors_gazebo)/worlds/comstock.world"/>
     </include>
-    
-    <!-- <node pkg="ctrl_planner" name="GoToStartPoint" type="GoToStartPoint.py" output="screen">
-    </node> -->
-
-    <!-- <node pkg="ctrl_planner" name="RunSim" type="RunSim.py" output="screen">
-    </node> -->
 
 </launch>

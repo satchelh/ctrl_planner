@@ -21,7 +21,7 @@ if __name__ == '__main__':
     # tf.keras.backend.clear_session()
     # tf.compat.v1.keras.backend.set_session(session)
 
-    Sim = SimulationClass([15, 0, 2])
+    Sim = SimulationClass([17, -8, 2], StartWithWeights=False)
 
     
 
